@@ -7,6 +7,6 @@ An old but usefull check for cisco, procurve and linux.  As we had also use hpux
 
 #check_snmp_storage
 
-This one was already for linux and windows. added also hpux.  Same write had another plugin for that, which ws almost the same. so i put them together.
+This one was already for linux and windows. Added also hpux.  Same writer had another plugin for that, which was almost the same. so i put them together.
 
 
