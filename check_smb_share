@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Check for sharename on SMB with nagios
+# by Gerrit Doornenbal (g.doornenbal@gmail.com) 
+#
+# 2017-02-24
+#  fixed login problem for MS servers
+#  added option to check inside directories
+#  added option to check for number of existing files
+#  changed filecheck option to search using wildcards
+#  added option to check upon file age, older than .. seconds.
+#  added option to store login credentials inside a file.
+#  
+# 2011-11-23
+#  added file check option, to check if share is really available
+# Modified version of check_smb_share byMichael Hodges <michael@va.com.au> 2011-03-04
+# Modified version of check_smb by Dave Love <fx@gnu.org>
+
+REVISION=1.1
+PROGNAME=`/usr/bin/basename $0`
+PROGPATH=`echo $0 | sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+
+help () {
+    echo "\
+Nagios plugin to check SMB Share.
+
+Usage:
+  $PROGNAME -H <host> -s <sharename> [-d <dirname>] [-f <filename>] [-u <user>] [-p <password>] [-n] [-v] [-h --help] [-V --version]
+     -H hostname of the SMB host
+     -s sharename to look for
+     -f file- or directoryname to look for. You can use partial filenames, do not give a * (wildcard).
+     -d directory name to look for files or directory
+     -u username used to login. if no username is supplied, 'guest' wil be used.
+        for domain login use -u <domainname>/<username>
+     -p password for the username supplied.
+     -l Logincredential file location. Format of file is:
+          username=<DOMAIN>/<username>
+          password=<password> (escape special characters with a \)
+     -n number of files expected. Default is 1 or more. 
+	 -a age of file in seconds. When you're checking file's which should be away in specified time, you can set maxage here.
+     -v Verbose output, comes handy when troubleshooting errors with smbclient.
+     --help this help message
+	 
+examples:
+  $PROGNAME -H server.domain.com -s yourshare
+      Check for the existence of 'yourshare' on server.domain.com.
+  $PROGNAME -H server.domain.com -s yourshare -u DOMAIN/user -p yourpassword -f testfile.txt
+      This line looks for *testfile.txt files in \server.domain.com\yourshare, and gives OK when it exist.
+  $PROGNAME -H server.domain.com -s yourshare -l /path/to/pwfile -f .xml -d yourdir -n 0
+      This line looks for *.xml files in \server.domain.com\yourshare\yourdir, and gives OK when none exist.
+"
+}
+
+if [ $# -lt 1 ]; then
+    usage
+    exit $STATE_UNKNOWN
+fi
+
+user="guest"
+password=""
+
+# Read all command-line options
+while test -n "$1"; do
+    case "$1" in
+	--help | -h)
+	    help
+	    exit $STATE_OK;;
+	--version | -V)
+	    echo $PROGNAME $REVISION
+	    exit $STATE_OK;;
+	-H)
+	    shift
+	    host="$1";;
+	-s)
+	    shift
+	    share="$1";;
+	-d)
+	    shift
+	    dir="$1";;
+	-f)
+	    shift
+	    file="$1";;
+	-n)
+	    shift
+	    count="$1";;
+	-a)
+	    shift
+	    age="$1";;
+	-u)
+	    shift
+	    user="$1";;
+	-p)
+	    shift
+	    password="$1";;
+	-l)
+	    shift
+	    pwfile="$1";;
+	-v)
+		verbose=1;;
+	*)
+	    usage; exit $STATE_UNKNOWN;;
+    esac
+shift
+done
+
+if [ ! $share ]; then
+    usage
+    exit $STATE_UNKNOWN
+fi
+
+if [ $pwfile ]; then
+    source $pwfile
+	if [ $verbose ]; then
+		echo pwfile: username: $user pass: $password
+	fi 
+fi
+
+
+#First test for share existence.
+if [ ! $password ]; then
+	login="$user% -N"
+else 
+	login="$user%$password"
+fi
+command="smbclient -U $login -L $host"
+result=`$command 2>&1`
+if [ $verbose ]; then
+	echo command: $command
+	echo result : $result
+	echo
+fi
+stdout="SMB share found: "`echo "$result" | grep "$share" | head -n 1 | { read first _ ; echo $first ; }`
+errout="SMB Sharename "$share" NOT found on "$host
+testresult=`echo "$stdout" | grep "$share" | wc -l`
+
+#check to test file on share
+if [ $file ]; then
+	if [ $dir ]; then
+		dircheck="-D $dir "
+		dirshare="\\"$dir
+	fi
+	command="smbclient -U "$user"%"$password" //"$host"/"$share" "$dircheck"-c \"ls *"$file"*\""
+	result=`$command 2>&1`
+	testresult=`echo "$result" | grep "$file" | wc -l `
+	#check timestamp age
+	resulttime=`echo "$result" | grep "$file" | head -n 1 | tr -s " " | cut -d " " -f 5-9`
+	filetime=`date --date="$resulttime" +%s`
+	time=`date +%s`	
+	fileage=$((time-filetime))
+	
+	if [ $verbose ]; then
+		echo command: $command
+		echo result : $result
+		echo Current time: $time Filetime: $filetime Fileage: $fileage $age
+	fi
+	
+	#Do the test for number of files.
+	if [ $count ]; then 
+		if [ $count -eq $testresult ]; then
+			stdout="SMB file "$file" found "$testresult" times on "$share$dirshare
+			testresult=1
+		else 
+			if [ $age ]; then 
+				if [ $age -gt $fileage ]; then
+				stdout="SMB file "$file" found ($fileage sec old) on "$share$dirshare
+				testresult=1
+				else
+				errout="SMB file "$file" found ($fileage sec old) on "$share$dirshare
+				testresult=0
+				fi
+				
+			else 
+				errout="SMB file "$file" found "$testresult" times on "$share$dirshare
+				testresult=0
+			fi
+		fi
+	else 
+	#Do the test for existence of the file
+		if [ $testresult -gt 1 ]; then
+			stdout="SMB file "$file" found "$testresult" times on "$share$dirshare
+		else 
+			stdout="SMB file "$file" found on "$share$dirshare
+		fi
+		errout="SMB file "$file" NOT found on "$share$dirshare
+	fi
+fi 
+
+if [ $testresult != 0 ]; then
+    echo "OK "$stdout
+    exit $STATE_OK
+else
+    echo "CRITICAL "$errout
+    exit $STATE_CRITICAL
+fi
