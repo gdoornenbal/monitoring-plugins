@@ -27,3 +27,11 @@ in short the following:
  * modified default warning/critical behavior. (no defaults anymore)
  * added option to give complete QUERY instead of parts.
  * added options to use an sql file as query.
+
+###check_h3c_components.sh
+
+This one is initaly created by ljorg, but i did a huge update:
+ * modified input supporting commandline options with arguments instead of arguments only.
+ * added debug option
+ * added check for number of expected irf and psu's (thanks to frank https://github.com/franklouwers/nagios-checks.)
+ * added failed SFP link check count option.
