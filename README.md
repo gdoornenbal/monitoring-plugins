@@ -33,5 +33,9 @@ in short the following:
 This one is initaly created by ljorg, but i did a huge update:
  * modified input supporting commandline options with arguments instead of arguments only.
  * added debug option
- * added check for number of expected irf and psu's (thanks to frank https://github.com/franklouwers/nagios-checks.)
+ * added check for number of expected irf and psu's (thanks to frank. https://github.com/franklouwers/nagios-checks)
  * added failed SFP link check count option.
+ 
+###check_aruba_instant
+
+Used to monitor number of AP's and connected devices in an aruba instant cluster.  You can set filters and warning parameters. See script help for more info.
