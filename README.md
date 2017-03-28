@@ -39,3 +39,7 @@ This one is initaly created by ljorg, but i did a huge update:
 ###check_aruba_instant
 
 Used to monitor number of AP's and connected devices in an aruba instant cluster.  You can set filters and warning parameters. See script help for more info.
+
+###check_snmp_win
+
+An old plugin to check the state of windows services (http://nagios.manubulon.com). I expanded the type (-T) option with 'process', so we can check for any process running in windows, even when it is not a service.
