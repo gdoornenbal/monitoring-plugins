@@ -17,6 +17,8 @@
 # feb 2017 by Gerrit Doornenbal
 #   Huge rewrite, several debugging and other options added.
 #   added SQL option, with file and direct SQL.
+# okt 2017
+#   Added option to add status based on sql output value.
 #
 # This script is based on:
 #   check_mysql_count.pl version 0.02
@@ -51,28 +53,34 @@ my $port=3306;
 my $user;
 my $pass;
 my ($DB, $TABLE, $COND, $QUERY, $SQL);
-my ($warn, $crit);
+my ($warn, $crit, $invert);
 my ($perf, $debug);
 
 #Start 
 check_options();
 
+if (defined($debug)) { print ("\n");} #extra space above debug output
 #Create the correct SQL query
 if (defined($QUERY)) {
 	#test for sql file or direct query
 	if (index($QUERY, ".sql") != -1) {
 		$SQL = "source $QUERY;";	
 		if (defined($debug)) { 
-			print "SQL script file:\n"; 
+			print "SQL script file: $QUERY\n"; 
+			print "SCRIPT:\n"; 
 			open FILE, "$QUERY" or die "Could not open $QUERY";
 				while(<FILE>) {
-				print $_;
+				print " $_";
 				}
 			close FILE;
 			print "\n"; 
 			}
 	} else { 
-		$SQL = "$QUERY;";	
+		$SQL = "$QUERY;";
+		if (defined($debug)) { 
+			print "SCRIPT:\n";
+			print (" $SQL\n");
+			}
 	}
 } else { 
 	$COND =~ s/'/\\'/g;
@@ -80,7 +88,7 @@ if (defined($QUERY)) {
 	$SQL = "SELECT COUNT(1) \"rows\" FROM $TABLE $COND;";
 }
 
-if (defined($debug)) { print ("SQL query: $SQL \n");}
+#if (defined($debug)) { print ("SQL query: $SQL \n");}
 
 #Start the query
 open (OUTPUT, "$MYSQL -B -h $host -u $user --password=\"$pass\" $DB -e '$SQL' 2>&1 |");
@@ -99,12 +107,19 @@ while (<OUTPUT>) {
 		$count = $_;
 		}
 }
-if (defined($debug)) { print "name=$countname count=$count\n"; }
+if (defined($debug)) { print "SQL RESULT: name=$countname count=$count\n"; }
 
 #Check for warn/crit criteria
 if (defined($warn) && defined($crit) ) {
-if ($count >= $warn) { $state = "WARNING"; }
-if ($count >= $crit) { $state = "CRITICAL"; }
+	if (defined($invert)) {
+		if (defined($debug)) { print "Give error when count value ($count) is lower than w/c limits ($warn/$crit)\n"; }
+		if ($count <= $warn) { $state = "WARNING"; }
+		if ($count <= $crit) { $state = "CRITICAL"; }
+	} else {
+		if (defined($debug)) { print "Give error when count value ($count) is higher than w/c limits ($warn/$crit)\n"; }
+		if ($count >= $warn) { $state = "WARNING"; }
+		if ($count >= $crit) { $state = "CRITICAL"; }
+	}
 }
 if ($count =~ m/\D/) { $state = "UNKNOWN"; }
 #Create correct output, including perfdata.
@@ -147,6 +162,7 @@ sub check_options () {
 		'Q|query:s' => \$QUERY,
 		'w|warn:i' => \$warn,
 		'c|crit:i'	=> \$crit,
+		'i|invert'	=> \$invert,
 		'f|perf'	=> \$perf,
 	);
 
@@ -167,8 +183,10 @@ sub print_usage {
 	print "   or\n";
 	print "    -Q Instead of table and conditionals you can also give a SQL query or a .sql filename with the query.\n";
 	print "       This gives you the opportunity to use more complicated scripts.\n";
-	print "   -w number of rows to warning state.\n";
-	print "   -c number of rows to critical state.\n";
+	print "   -w output value (number of rows) warning state.\n";
+	print "   -c output vale (number of rows) to critical state.\n";
+	print "   -i invert warning/critical checks: check output value is lower instead of higher(default).\n";
+	print "      example: w=10, c=5: output 15=>OK, output 9=>warning, output 5=>critical\n";
 	print "   -f Show performance output.\n";
 	print "   -v Verbose output, nice for testing your scripts.\n";
 	print "Examples:\n";
