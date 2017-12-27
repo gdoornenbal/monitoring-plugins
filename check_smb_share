@@ -3,6 +3,9 @@
 # Check for sharename on SMB with nagios
 # by Gerrit Doornenbal (g.doornenbal@gmail.com) 
 #
+# 2017-12-27
+#  added smb.conf option to disable spnego(iation) for some old samba servers.
+#
 # 2017-02-24
 #  fixed login problem for MS servers
 #  added option to check inside directories
@@ -19,6 +22,10 @@
 REVISION=1.1
 PROGNAME=`/usr/bin/basename $0`
 PROGPATH=`echo $0 | sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
 
 help () {
     echo "\
@@ -32,12 +39,13 @@ Usage:
      -d directory name to look for files or directory
      -u username used to login. if no username is supplied, 'guest' wil be used.
         for domain login use -u <domainname>/<username>
+     -o disable spnego(tiaton).
      -p password for the username supplied.
      -l Logincredential file location. Format of file is:
           username=<DOMAIN>/<username>
           password=<password> (escape special characters with a \)
      -n number of files expected. Default is 1 or more. 
-	 -a age of file in seconds. When you're checking file's which should be away in specified time, you can set maxage here.
+	 -a age of file in seconds. When you're checking file's which should be away in specified time, you can set max age here.
      -v Verbose output, comes handy when troubleshooting errors with smbclient.
      --help this help message
 	 
@@ -52,12 +60,13 @@ examples:
 }
 
 if [ $# -lt 1 ]; then
-    usage
+    help
     exit $STATE_UNKNOWN
 fi
 
 user="guest"
 password=""
+nospnego=""
 
 # Read all command-line options
 while test -n "$1"; do
@@ -97,14 +106,16 @@ while test -n "$1"; do
 	    pwfile="$1";;
 	-v)
 		verbose=1;;
+	-o) 
+		nospnego=" --option=clientusespnego=no";;
 	*)
-	    usage; exit $STATE_UNKNOWN;;
+	    help; exit $STATE_UNKNOWN;;
     esac
 shift
 done
 
 if [ ! $share ]; then
-    usage
+    help
     exit $STATE_UNKNOWN
 fi
 
@@ -122,13 +133,14 @@ if [ ! $password ]; then
 else 
 	login="$user%$password"
 fi
-command="smbclient -U $login -L $host"
+command="smbclient -U $login -L $host$nospnego"
 result=`$command 2>&1`
 if [ $verbose ]; then
 	echo command: $command
 	echo result : $result
 	echo
 fi
+
 stdout="SMB share found: "`echo "$result" | grep "$share" | head -n 1 | { read first _ ; echo $first ; }`
 errout="SMB Sharename "$share" NOT found on "$host
 testresult=`echo "$stdout" | grep "$share" | wc -l`
@@ -139,7 +151,7 @@ if [ $file ]; then
 		dircheck="-D $dir "
 		dirshare="\\"$dir
 	fi
-	command="smbclient -U "$user"%"$password" //"$host"/"$share" "$dircheck"-c \"ls *"$file"*\""
+	command="smbclient -U "$user"%"$password"$nospnego //"$host"/"$share" "$dircheck"-c \"ls *"$file"*\""
 	result=`$command 2>&1`
 	testresult=`echo "$result" | grep "$file" | wc -l `
 	#check timestamp age
