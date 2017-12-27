@@ -18,7 +18,7 @@
 #   Huge rewrite, several debugging and other options added.
 #   added SQL option, with file and direct SQL.
 # okt 2017
-#   Added option to add status based on sql output value.
+#   Added option invert w/c status check.
 #
 # This script is based on:
 #   check_mysql_count.pl version 0.02
