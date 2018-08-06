@@ -19,6 +19,7 @@
 #   added SQL option, with file and direct SQL.
 # okt 2017
 #   Added option invert w/c status check.
+#   Added option to add status based on sql output value.
 # august 2018
 #	removed commandline password usage to suppress mysql commandline insecure warning.
 #
