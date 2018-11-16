@@ -59,4 +59,3 @@ It only uses the oracle instant client, it does not need to install complete ORA
  * Corrected help dialog by vdmkenny
  * Made plugin suiteable for oracle 12.2 without SID support
  * Added verbose output option
- 
