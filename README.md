@@ -44,3 +44,13 @@ Used to monitor number of AP's and connected devices in an aruba instant cluster
 ### check_snmp_win
 
 An old plugin to check the state of windows services (http://nagios.manubulon.com). I expanded the type (-T) option with 'process', so we can check for any process running in windows, even when it is not a service.
+
+### check_ssl_certificate
+
+Also an old plugin once created by David Alden. I added an option to use SNI servername, and modified some output text to be more consistent.
+git add	
+### check_oracle_instant
+
+This perl nagios plugin allows you to check oracle service (ability to connect to database ) and the health of oracle database (Dictionary Cache Hit Ratio, Library Cache Hit Ratio,
+DB Block Buffer Cache Hit Ratio, Latch Hit Ratio, Disk Sort Ratio, Rollback Segment Waits, Dispatcher Workload) 
+It only uses the oracle instant client, it does not need to install complete ORACLE client or compile other perl modules.
