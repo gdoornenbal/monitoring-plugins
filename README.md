@@ -48,9 +48,15 @@ An old plugin to check the state of windows services (http://nagios.manubulon.co
 ### check_ssl_certificate
 
 Also an old plugin once created by David Alden. I added an option to use SNI servername, and modified some output text to be more consistent.
-git add	
+
 ### check_oracle_instant
 
 This perl nagios plugin allows you to check oracle service (ability to connect to database ) and the health of oracle database (Dictionary Cache Hit Ratio, Library Cache Hit Ratio,
 DB Block Buffer Cache Hit Ratio, Latch Hit Ratio, Disk Sort Ratio, Rollback Segment Waits, Dispatcher Workload) 
-It only uses the oracle instant client, it does not need to install complete ORACLE client or compile other perl modules.
+It only uses the oracle instant client, it does not need to install complete ORACLE client or compile other perl modules. i added the following options over the years:
+ * Option added to skip specific tests.
+ * Added Tablespace usage check. Find's the tablespace with the highest percentage used.
+ * Corrected help dialog by vdmkenny
+ * Made plugin suiteable for oracle 12.2 without SID support
+ * Added verbose output option
+ 
