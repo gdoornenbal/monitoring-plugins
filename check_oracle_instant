@@ -1,0 +1,230 @@
+#!/usr/bin/perl
+# This perl nagios plugin allows you to check oracle service (ability to connect to database ) 
+# and the health of oracle database (Dictionary Cache Hit Ratio, Library Cache Hit Ratio,
+# DB Block Buffer Cache Hit Ratio, Latch Hit Ratio, Disk Sort Ratio, Rollback Segment Waits, Dispatcher Workload) 
+# It is possible to define your own parameters. 
+# Big advantage is that it does not need to install ORACLE client or compile other perl modules.
+#
+# more info see: 
+# https://github.com/gdoornenbal/monitoring-plugins
+# old version, but with installation tips:
+# https://exchange.nagios.org/directory/Plugins/Databases/Oracle/Check-Oracle-status-%26-health-without-install-Oracle-client--2D-enhanced/details
+#
+# modified by Gerrit Doornenbal, g(dot)doornenbal(at)gmail(dot)com
+#
+# addressed issues:
+#  v1.0 - Better help and command line options
+#  v1.0 - Risk of locked users due to wrong parameters is much lower. 
+#  v1.0 - Better error handling
+#  v1.0 - Database health error give more info.
+#  v1.1 - Options added to skip specific tests, when specific results are not marked as problematic.
+#  v1.1 - dec2012: Added Tablespace usage check. Find's the tablespace with the highest percentage used. 
+#         (counting max tablespace filesize against the real filesize minus the free space inside the db file.)
+#  v1.1.1 - aug2016: Corrected help dialog by vdmkenny.
+#         Was a vault on my side, but due to compatibility i'll leave it this way, however it is not logical.. :-(
+#  v1.2 - nov2018 Made suiteable for oracle 12.2 without SID support, and added verbose option.
+#
+
+use strict;
+no strict 'refs';
+
+# Check for proper args....
+my %status="";
+if ($#ARGV <= 0){
+  &print_help();
+}
+
+my ($host, $port, $sid, $user, $pass, $nocheck, $verbose) = pars_args();
+if ($verbose) { print " Verbose is on:\n Submitted arguments are: $host $port $sid $user $pass $nocheck $verbose\n"; }
+
+sub trim($);
+my @result;
+my %ERRORS=('OK'=>0,'WARNING'=>1,'CRITICAL'=>2);
+# Create param_array without deselected checks.
+my @param_array;
+if (index($nocheck, "t") == -1) {push @param_array, [95,"<","TableSpace usage",'select * from (select round((d.sizeMb-round(sum(f.bytes))/1048576)/d.maxMb*100) percentused, f.tablespace_name from dba_free_space f, (select tablespace_name, sum(MAXBYTES)/1048576 maxMb, sum(bytes)/1048576 sizeMb from dba_data_files group by tablespace_name) d where f.tablespace_name (+)=d.tablespace_name group by f.tablespace_name, d.sizeMb, d.maxMb order by percentused desc) where rownum <2;'];}
+if (index($nocheck, "d") == -1) {push @param_array, [85,">","Dictionary Cache Hit Ratio",'SELECT (1 - (Sum(getmisses)/(Sum(gets) + Sum(getmisses)))) * 100 FROM v\$rowcache;'];}
+if (index($nocheck, "l") == -1) {push @param_array, [99,">","Library Cache Hit Ratio",'SELECT (1 -(Sum(reloads)/(Sum(pins) + Sum(reloads)))) * 100  FROM   v\$librarycache;'];}
+if (index($nocheck, "b") == -1) {push @param_array, [89,">","DB Block Buffer Cache Hit Ratio",'SELECT (1 - (phys.value / (db.value + cons.value))) * 100 FROM v\$sysstat phys,v\$sysstat db,v\$sysstat cons WHERE  phys.name  = \'physical reads\' AND db.name = \'db block gets\' AND cons.name  = \'consistent gets\';'];}
+if (index($nocheck, "a") == -1) {push @param_array, [98,">","Latch Hit Ratio",'SELECT (1 - (Sum(misses) / Sum(gets))) * 100  FROM   v\$latch;'];}
+if (index($nocheck, "s") == -1) {push @param_array, [5,"<","Disk Sort Ratio",'SELECT (disk.value/mem.value) * 100 FROM v\$sysstat disk,v\$sysstat mem WHERE  disk.name = \'sorts (disk)\' AND mem.name  = \'sorts (memory)\';'];}
+if (index($nocheck, "r") == -1) {push @param_array, [5,"<","Rollback Segment Waits",'SELECT (Sum(waits) / Sum(gets)) * 100  FROM   v\$rollstat;'];}
+if (index($nocheck, "w") == -1) {push @param_array, [50,"<","Dispatcher Workload",'SELECT NVL((Sum(busy) / (Sum(busy) + Sum(idle))) * 100,0) FROM v\$dispatcher;'];}
+# it is possible define own selects [reference value,operator (<;>;eq;ne etc.),Description,select]			   
+
+my @results;
+my $logontest = logon();
+my $i=0;
+if ($verbose) { print " Logontest result: $logontest (ORA-01017 is okay)\n"; }
+if ($logontest eq "ORA-01017"){
+if ($verbose) { print " Connect query: sqlplus -s $user/$pass@ $host:$port/$sid\n"; }
+for (my $i=0; $i<array_rows(\@param_array); $i++){
+# print "$param_array[$i][0] -- $param_array[$i][1] -- $param_array[$i][2] -- $param_array[$i][3]\n";
+
+open (SQL,"sqlplus -s $user/$pass\@$host:$port/$sid << EOF
+set pagesize 0
+set numformat 999.999
+$param_array[$i][3]
+EOF |") or die;
+  while ( my $res = <SQL> ) {
+    #$res=trim($res);
+    #print "result=".$res."\n";
+    if ( $res =~/^\s*\S+/ ) { push(@results,trim($res));}
+  }
+}
+
+# checking the results from all tests.
+for ($i=0;$i<@results;$i++) {
+  my $value =$results[$i];
+  $value =~ s/^\S+\s*//; #For tablespace check get tablespace name. (2nd string)
+  $results[$i] =~ s/ .*//; #and remove the name (2nd string) from the results....
+  if ($verbose) { print " checking ".$param_array[$i][2]." RESULT:".$results[$i]." value:".$value." reference value:".$param_array[$i][0]."\n"; }
+  if ($results[$i] eq "ERROR:") {print "Unable to connect to ORACLE $sid, invalid credentials or locked !!! \n"; exit $ERRORS{"CRITICAL"};}
+  eval "unless (".$results[$i].$param_array[$i][1].$param_array[$i][0].") { print\"".$param_array[$i][2]." ".$sid.":$value result ".int($results[$i])." against $param_array[$i][0] \\n\"; exit ".$ERRORS{"WARNING"}.";}";
+
+}
+print "status and health of database $sid is OK\n";
+exit $ERRORS{"OK"};
+
+} else {print "Unable to connect to ORACLE $sid, error $logontest !!! \n"; exit $ERRORS{"CRITICAL"};}
+
+sub array_rows {
+    my ($array_rows) = @_;
+
+    my $rows = @$array_rows;
+    return $rows;
+       }
+
+sub trim($) {
+        my $string = shift;
+        $string =~ s/^\s+//;
+        $string =~ s/\s+$//;
+        return $string;
+}
+
+sub logon {
+# changed to not existing (mismatch) user to stop system user being locked.
+##open (SQL,"sqlplus -s mismatch/mismatch@\\(DESCRIPTION=\\(ADDRESS=\\(PROTOCOL=TCP\\)\\(Host=$host\\)\\(Port=$port\\)\\)\\(CONNECT_DATA=\\(SID=$sid\\)\\)\\)</dev/null
+if ($verbose) { print " Logon test query: sqlplus -s mismatch/mismatch\@$host:$port/$sid\n"; }
+open (SQL,"sqlplus -s mismatch/mismatch\@$host:$port/$sid</dev/null
+|") or die;
+  while ( my $res = <SQL> )
+             {
+           if ($res =~ /^(ORA-\d{5})/) {return $1;}
+             }
+}
+
+sub pars_args {
+
+  my $host      = "localhost";
+  my $port      = ""; 
+  my $sid       = "";
+  my $user		= "";
+  my $pass      = "";
+  my $file      = "";
+  my $verbose   = "0";
+  
+#  $oldarg = "";
+ 
+  while(@ARGV)
+  {
+    if($ARGV[0] =~/^-H|^--host/) 
+    {
+      $host = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+    if($ARGV[0] =~/^-p|^--port/) 
+    {
+      $port = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+    if($ARGV[0] =~/^-s|^--sid/) 
+    {
+      $sid = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+	if($ARGV[0] =~/^-n|^--nocheck/) 
+    {
+      $nocheck = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+	if($ARGV[0] =~/^-f|^--file/) 
+    {
+      $file = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+	    open my $info, $file or die "Could not open $file: $!";
+		while( my $line = <$info>)  {   
+		my $newargv = $line." ".join(" ", @ARGV);
+		#print "newargv is: $newargv !\n";
+		@ARGV = split(" ", $newargv);
+		}
+		close $info;
+      next;
+    }
+	if($ARGV[0] =~/^-u|^--user/) 
+    {
+      $user = $ARGV[1];
+      shift @ARGV;
+	  shift @ARGV;
+      next;
+    }
+	if($ARGV[0] =~/^-w|^--pass/) 
+    {
+      $pass = $ARGV[1];
+      shift @ARGV;
+	  shift @ARGV;
+      next;
+    }
+	if($ARGV[0] =~/^-v|^--verbose/) 
+    {
+      $verbose = 1;
+      shift @ARGV;
+      next;
+    }
+	# Code to jump out of loop when not existing argument is used (The while loop only reaches this point if all options above have failed.)
+    print "Unknown argument used, correct your syntax.!!! \n"; exit($status{"UNKNOWN"});
+  }
+  return ($host, $port, $sid, $user, $pass, $nocheck, $verbose); } 
+
+sub print_help() {
+  print "This plugin logs into the database and does some health checking inside the database.\n\n";
+  print "Usage: check_oracle_instant -H host -p listener-port -s SID -u username -w password -n tdlbasrw -f filename\n\n";
+  print "Options:\n";
+  print " -H --host STRING or IPADDRESS\n";
+  print "    Address of the indicated host.\n";
+  print " -p --lsn portnumber\n";
+  print "    Oracle listener port number.\n";
+  print " -s --sid Connect String\n";
+  print "    Oracle connect string (SID or Service Name)\n";
+  print " -u --user username\n";
+  print "    Oracle login name\n";
+  print " -w --pass password\n";
+  print "    Oracle password\n";
+  print " -n --nocheck dlbasrw\n";
+  print "    Here you can disable specific tests in case you don't want them:\n";
+  print "    t: Tablespace usage\n";
+  print "    d: Dictionary Cache Hit Ratio\n";
+  print "    l: Library Cache Hit Ratio\n";
+  print "    b: DB Block Buffer Cache Hit Ratio\n";
+  print "    a: Latch Hit Ratio\n";
+  print "    s: Disk Sort Ratio\n";
+  print "    r: Rollback Segment Waits\n";
+  print "    w: Dispatcher Workload\n";
+  print " -v --verbose\n";
+  print "    Verbose output, give extra info while doing all tests\n";
+  print " -f --file filename\n";
+  print "    Filename with any (default) option as stated above.\n";
+  print "    This file contains one line, with all options you wish to use. example:\n";
+  print "      -l 1521 -u system -p testpass\n";
+  print "    Settings set after the -f in the commandline wil override the settings in this file.\n\n";
+  exit($status{"UNKNOWN"});
+}
