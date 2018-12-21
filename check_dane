@@ -1,0 +1,225 @@
+#!/bin/bash
+# Author: Gerrit Doornenbal g(dot)doornenbal(at)gmail(dot)com
+# Date: dec mrt 2018
+# Description: Used to monitor the state of your DANE/TLSA implementation.
+# Dependencies: openssl, host.
+#
+# for more info about DANE/TLSA:
+# see https://en.wikipedia.org/wiki/DNS-based_Authentication_of_Named_Entities#Certificate_usage
+#
+# License: This nagios/icinga plugin comes with ABSOLUTELY NO WARRANTY. You may redistribute copies of
+# the plugins under the terms of the GNU General Public License. For more information about these 
+# matters, see the GNU General Public License.
+# Some parts/ideas are stolen from other scripts:
+#  
+# dec 2018  v0.1.0
+#	Initial release, with many thanks to Gordon Davisson@stackoverflow for the cert download part
+#   and Viktor Dukhovni@letsencrypt.org for the hash generation part!
+#   
+
+version=0.1.0
+
+#### Procedures / Functions
+extract() {
+  # TLSA # X # : selector what part of certificate to check:  0=whole certificate, 1=public key.
+  case "$3" in
+  0) openssl x509 -in "$1" -outform DER;;
+  1) openssl x509 -in "$1" -noout -pubkey | openssl pkey -pubin -outform DER;;
+  esac
+}
+digest() {
+  # TLSA # # X : matching type: 0:entire cert-info 1: SHA-256 hash 2:SHA-512 hash
+  case "$4" in
+  0) cat;;
+  1) openssl dgst -sha256 -binary;;
+  2) openssl dgst -sha512 -binary;;
+  esac
+}
+encode() {
+  local cert=$1; shift
+  local u=$1; shift
+  local s=$1; shift
+  local m=$1; shift
+  printf "%s\n" \
+    "$(hexdump -ve '/1 "%02X"')"
+}
+genrr() {
+    rr=$(
+	extract "$@" | digest "$@" | encode "$@"
+	exit $(( ${PIPESTATUS[0]} | ${PIPESTATUS[1]} | ${PIPESTATUS[2]} ))
+    )
+    status=$?; if [ $status -ne 0 ]; then exit $status; fi
+}
+print_help_msg(){
+	echo "This plugin is used to validate your DANE/TLSA configuration for your services"
+	echo
+	echo "Usage: ${0##*/} -H <hostname> [-P Port -D <DNS server to query>]"
+	echo 
+	echo "Explanation of options:"
+	echo " -H  The name of the server hosting your certificate"
+	echo "Optional options:"
+	echo " -P  Port of the service you want to test. (default 443)"
+	echo "    The two options below are useful in split-brain dns environments:"
+	echo " -I  IP address of the server hosting the certificate."
+	echo " -D  FQDN or IP address of the DNS server you want to query."
+	echo " -v  Verbose: give extra output for testing purposes"
+	echo " -V  version of this plugin."
+	echo " -h or ? this help message."
+	echo 
+}
+
+#### Actual Start of this script
+
+#setting defaults
+hostname=""
+hostip=""
+port=443
+dnsserver=""
+verbose=0
+nagios_status=0
+nagios_message=""
+nagios_state_msg="OK: "
+
+#reading options
+while getopts H:P:D:I:?hvV options;
+do
+	case $options in
+		H ) hostname="$OPTARG";;
+		P ) port="$OPTARG";;
+		D ) dnsserver="$OPTARG";;
+		I ) hostip="$OPTARG";;
+		v ) verbose=1;;
+		V ) echo "${0##*/} version $version"
+			exit 1;;
+    	* ) print_help_msg
+        	exit 1;;
+	esac
+done
+
+#check for minimal supplied options.
+if [ "$hostname" == "" ]
+then
+  print_help_msg 
+  exit 1
+fi
+
+###First find the TLSA records in dns
+command="host -t tlsa _$port._tcp.$hostname $dnsserver | grep TLSA | awk '{ print \$5 \$6 \$7, \$8\$9}'"
+if [ $verbose = 1 ]; then echo "Downloading DNS TLSA records for $hostname:$port"; echo " command: $command"; fi
+tlsadnsdata=$(eval $command)
+
+if [ $verbose = 1 ]; then 
+	echo " result:"
+	while IFS= read -r line <&3; do
+		echo " $line"
+	done 3<<<$tlsadnsdata
+fi
+
+if [ "$tlsadnsdata" = "" ]; then
+	if [ ! $dnsserver = "" ]; then dnstext=" at $dnsserver"; fi
+	echo "UNKNOWN: NO TLSA record found for $hostname:$port$dnstext"
+	exit 3
+fi	
+
+### TLSA dns record(s) found, now downloading the certificate using openssl..
+# If the protocol/port specified is a non-SSL service that s_client supports starttls for, enable that
+openssl_options=()
+if [ $port = 25 ]; then openssl_options+=(-starttls smtp); fi
+if [ $port = 110 ]; then openssl_options+=(-starttls pop3); fi
+if [ $port = 143 ]; then openssl_options+=(-starttls imap); fi
+#add sni for https connections.
+if [ $port = 443 ]; then openssl_options+=(-servername $hostname); fi
+#download chain.
+if [ "$hostip" = "" ]; then hostip=$hostname; fi
+command="openssl s_client -showcerts -connect \"$hostip:$port\" ${openssl_options[@]} </dev/null 2>&1"
+if [ $verbose = 1 ]; then echo "Downloading Certificate chain from $hostip:$port"; echo " command: $command"; fi
+connect_output=$(eval $command) || {
+    status=$?
+    echo "CRITICAL: Could not download certificate chain from $hostip:$port" >&2
+    exit 2
+}
+current_cert=""
+nl=$'\n'
+state=begin
+readcert="There was a problem reading the certificate"
+#remove unwanted lines from the downloaded certificate chain.
+while IFS= read -r line <&3; do
+    case "$state;$line" in
+      "begin;Certificate chain" )
+        # First certificate is about to begin!
+        state=reading
+        ;;
+      "reading;---" )
+        # That's the end of the certs...
+		readcert="Certificate is successfully downloaded"
+        break
+        ;;
+      "reading;"* )
+        # Otherwise, it's a normal part of a cert; accumulate it to be
+        # written out when we see the end
+        current_cert+="$nl$line"
+        ;;
+    esac
+done 3<<< "$connect_output"
+if [ $verbose = 1 ]; then echo " $readcert"; fi
+
+### loop through found TLSA records and test it against the retrieved certificate.
+if [ $verbose = 1 ]; then echo "Testing found DNS TLSA records against Certificate"; fi
+recno=1
+hashfail=0
+hashpass=0
+nagios_message="$hostname:$port TLSA record"
+while IFS= read -r line <&3; do #Loop through retrieved dns tlsa records.
+ type=${line:0:3}
+ hash=${line:4}
+ hash=${hash^^} #to uppercase
+ if [ $verbose = 1 ]; then echo " tlsa record $recno: $type-$hash"; fi
+ 
+ 
+ usage="13" #usage field, 1 and 3 need first certificate. 
+ cert=
+
+	while read line #Loop through certificate chain..
+	do
+		if [[ -z "$cert" && ! "$line" =~ ^-----BEGIN ]]; then
+			continue
+		fi
+		cert=$(printf "%s\n%s" "$cert" "$line")
+		if [[ "$line" =~ ^-----END && ! -z "$cert" ]]; then  #got the complete cert :-)
+			if [ $verbose = 1 ]; then echo " Testing Cert $usage <!-> ${usage/${type:0:1}/} $type "; fi
+			if [[ "$usage" != "${usage/${type:0:1}/}" ]]; then #but.. is this the correct certificate?
+				if [ $verbose = 1 ]; then echo $cert; fi
+				genrr <(echo "$cert") ${type:0:1} ${type:1:1} ${type:2:1}
+				#genrr <(echo "$cert") ${type:0:1} 0 ${type:2:1}
+				break #only one hash needed; skip the rest of the certificate chain
+			fi
+			#Clean up for next (intermediate) certificate
+			cert=""
+			usage="02" #TLSA TYPE 0 and 2 need intermediate certificate(s)
+		fi
+	done <<<$current_cert
+ if [ $verbose = 1 ]; then echo " Generated hash: $rr"; fi
+ if [ $rr = $hash ]; then
+	if [ $verbose = 1 ]; then echo " Passed: certificate hash is equal!!"; fi
+	nagios_message="$nagios_message $type:PASS"
+	hashpass=$((hashpass+1))
+ else 
+	if [ $verbose = 1 ]; then echo " Failed: certificate hash is corrupted!!"; fi
+	nagios_message="$nagios_message $type:FAIL"
+	hashfail=$((hashfail+1))
+ fi
+ recno=$((recno+1))
+done 3<<< "$tlsadnsdata"
+
+### Preparing script output..
+if [ $hashfail != 0 ]; then
+	nagios_status=2
+	nagios_state_msg="CRITICAL: "
+	if [ $hashpass != 0 ]; then
+		nagios_status=1
+		nagios_state_msg="WARNING: "
+	fi
+fi
+	
+echo "$nagios_state_msg$nagios_message"
+exit $nagios_status
