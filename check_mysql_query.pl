@@ -2,7 +2,7 @@
 #####################################################################
 #
 # check_mysql_query.pl
-#  jan 2017 Gerrit Doornenbal
+#  aug 2018 Gerrit Doornenbal
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,6 +19,9 @@
 #   added SQL option, with file and direct SQL.
 # okt 2017
 #   Added option invert w/c status check.
+#   Added option to add status based on sql output value.
+# august 2018
+#	removed commandline password usage to suppress mysql commandline insecure warning.
 #
 # This script is based on:
 #   check_mysql_count.pl version 0.02
@@ -52,6 +55,8 @@ my $host="localhost";
 my $port=3306;
 my $user;
 my $pass;
+my ($pwfile,$fh);
+my $tpwfile="/tmp/pwfile.cnf";
 my ($DB, $TABLE, $COND, $QUERY, $SQL);
 my ($warn, $crit, $invert);
 my ($perf, $debug);
@@ -90,8 +95,21 @@ if (defined($QUERY)) {
 
 #if (defined($debug)) { print ("SQL query: $SQL \n");}
 
+# deprecated: create password file when user/pass is given..
+if (not defined($pwfile)) {
+	if (defined($debug)) { print "Creating passwordfile for name=$user pass=$pass\n"; }
+	$pwfile = $tpwfile;
+	open ( $fh, '>', $pwfile );
+	print $fh "[client]\n";
+	print $fh "user = $user\n";
+	print $fh "password = $pass\n";
+	close $fh;
+}
+
 #Start the query
-open (OUTPUT, "$MYSQL -B -h $host -u $user --password=\"$pass\" $DB -e '$SQL' 2>&1 |");
+###open (OUTPUT, "$MYSQL -B -h $host -u $user --password=\"$pass\" $DB -e '$SQL' 2>&1 |");
+open (OUTPUT, "$MYSQL --defaults-extra-file=$pwfile -B -h $host $DB -e '$SQL' 2>&1 |");
+
 #And read the SQL output.
 while (<OUTPUT>) {
 	if (/failed/||/ERROR/) { 
@@ -135,6 +153,9 @@ if ( not defined($status) ){
 	}
 }
 
+# deprecated: remove temporary pwfile. 
+if ( -e $tpwfile ) { unlink ($tpwfile); } 
+
 print "$status\n";
 exit $ERRORS{$state};
 
@@ -154,6 +175,7 @@ sub check_options () {
 		'v|verbose'	=> \$debug,
 		'H|hostname:s'	=> \$host,
 		'P|port:i'	=> \$port,
+		'F|cred:s' => \$pwfile,
 		'u|user:s'	=> \$user,
 		'p|pass:s' => \$pass,
 		'D|database:s' => \$DB,
@@ -171,14 +193,18 @@ sub check_options () {
 }
 
 sub print_usage {
-	print "MySQL plugin for Nagios, version 0.2; 2008-2011 Michal Sviba; 2017 Gerrit Doornenbal\n\n";
+	print "MySQL plugin for Nagios, version 0.3; 2008-2011 Michal Sviba; 2018 Gerrit Doornenbal\n\n";
 	print "Script for running a SQL script @ MySQL.  The result of the SQL script should contain two lines with each one value:\n";
 	print "   line 1: the name for the value, line 2: the value.\n\n";
-	print "Usage: check_mysql_query.pl -H <host> -u <user> -p <pass> -D <db> -T <table> -C <cond> -Q <SQL query or file> [-w <warn> -c <crit> -f -v] \n";
-	print "   -u username to login to mysql at <host>\n";
-	print "   -p password with SELECT privilege to use for <user> at <host>\n";
-	print "   -D DB where table is placed \n";
-	print "    -T table in DB\n";
+	print "Usage: check_mysql_query.pl -H <host> -F <cred-file> -D <db> -T <table> -C <cond> -Q <SQL query or file> [-w <warn> -c <crit> -f -v] \n";
+	print "   -F Credential File, location of file with login credentials as following:\n";
+	print "             [client]\n";
+	print "             user = whatever\n";
+	print "             password = whatever\n";
+	print "      The following options are deprecated; but still exist for backwards compatibility. don't use passwords in your command files.\n";
+	print "      -u username to login to mysql at <host>, -p password with SELECT privilege to use for <user> at <host>\n";
+	print "   -D MySQL Database \n";
+	print "    -T table in Database\n";
 	print "    -C conditionals in where section. (without 'where')\n";
 	print "   or\n";
 	print "    -Q Instead of table and conditionals you can also give a SQL query or a .sql filename with the query.\n";
@@ -190,11 +216,11 @@ sub print_usage {
 	print "   -f Show performance output.\n";
 	print "   -v Verbose output, nice for testing your scripts.\n";
 	print "Examples:\n";
-	print "   check_mysql_query.pl -H hostname -u user -p yourpass -D mysql -T user -w 10 -c 20\n";
+	print "   check_mysql_query.pl -H hostname -F ~/mysqlcred.cnf -D mysql -T user -w 10 -c 20\n";
 	print "      this one counts the number of rows in the mysql user table, and gives warning >10 rows, critical >20 rows.\n";
-	print "   check_mysql_query.pl -H hostname -u user -p yourpass -D mysql -Q 'SELECT COUNT(1) \"rows\" FROM user' -f\n";
+	print "   check_mysql_query.pl -H hostname -F ~/mysqlcred.cnf -D mysql -Q 'SELECT COUNT(1) \"rows\" FROM user' -f\n";
 	print "      counts the number of rows in the mysql user table, gives also performance output.\n";
-	print "   check_mysql_query.pl -H hostname -u user -p yourpass -D mysql -Q script.sql -f\n";
+	print "   check_mysql_query.pl -H hostname -F ~/mysqlcred.cnf -D mysql -Q script.sql -f\n";
 	print "      Execute the script inside script.sql on database mysql, with performance output.\n";
 	exit $ERRORS{"UNKNOWN"};
 }
