@@ -1,6 +1,15 @@
 # monitoring-plugins
 Here i put some created or modified monitoring plugins voor nagios/opsview/icinga.
 
+### check_dane
+
+A complete new plugin to check DANE TLSA records.  Already with the following options:
+ * hosts with sni enabled are supported
+ * mail ports with starttls are supported
+To support split-dns environments the following options are available
+ * Give specific ip address of the server hosting the certificate
+ * set fdqn or ip address of the DNS server you want to query.
+ 
 ### check_snmp_mem
 
 An old but usefull check for cisco, procurve and linux.  As we had also use hpux, i added that one to, instead of using another plugin.
