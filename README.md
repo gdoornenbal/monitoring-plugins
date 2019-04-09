@@ -54,11 +54,3 @@ Used to monitor number of AP's and connected devices in an aruba instant cluster
 
 An old plugin to check the state of windows services (http://nagios.manubulon.com). I expanded the type (-T) option with 'process', so we can check for any process running in windows, even when it is not a service.
 
-### check_dell_powerconnect
-
-This  Plugin updated in feb 2019 checks the hardware of DELL 35XX,62XX,N11XX switches (fans, temp-sensor, power supply), and probably more models!
-
-### check_ups_snmp.sh
-
-Plugin to check data from a cs121 UPS Web/SNMP management card, updated with info to show load_power and load_current in addition to existing percentage.
-
