@@ -1,0 +1,315 @@
+#!/usr/bin/perl
+# This  Plugin checks the hardware of DELL 35XX and 62XX Switches (fans, temp-sensor, power supply)
+# tested only with PC3524 and the PC6248.
+#
+# Copyright (c) 2019 Gerrit Doornenbal, g(dot)doornenbal(at)hccnet(dot)nl
+# Many thanks to Sascha Tentscher , who provided a very good example with his 3com plugin!
+# feb.2012: Thanks to Vicente Gavara Padilla for his work to address hash/communication/time-out errors.
+# 
+# release history:
+#	  2009 	Initial release, no version number.
+#	2-2012	Version 1.1:	update to address has/communication/time-out errors.
+#   2-2019  Version 1.2:    added support for N1100 series, and probably N1500,N2000,N2100,N3000,N3100 and N4000 too. 
+#							added debug option, firmware version, fixed unit temperature.
+#							rewrite view of Fans; when OK, just counting, with error printing out.
+#							added option to check number of (stackunits), and give failure when missing
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-130
+
+use strict;
+use Net::SNMP;
+
+my %status       = (  'OK'       => '0',
+                      'WARNING'  => '1',
+                      'CRITICAL' => '2',
+                      'UNKNOWN'  => '3' );
+
+my %unitstates   = (  '1' => 'unknown',
+                      '2' => 'inactive',
+                      '3' => 'OK',
+                      '4' => 'loading' );
+
+my %entitystate  = (  '1' => 'normal',
+                      '2' => 'warning',
+                      '3' => 'critical',
+                      '4' => 'shutdown',
+                      '5' => 'notPresent',
+                      '6' => 'notFunctioning' );
+
+sub pars_args
+{
+  my $ip        = "";
+  my $community = "";
+  my $units = 0;
+  my $debug = 0;
+  while($ARGV[0] =~/^-/) 
+  {
+    if($ARGV[0] =~/^-H|^--host/) 
+    {
+      $ip = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+    if($ARGV[0] =~/^-C|^--Community/) 
+    {
+      $community = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+	if($ARGV[0] =~/^-U|^--units/) 
+    {
+      $units = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
+	if($ARGV[0] =~/^-d|^--debug/) 
+    {
+      $debug = 1;
+      shift @ARGV;
+      next;
+    }
+  }
+  return ($ip, $community, $units, $debug);
+}
+sub print_help()
+{
+  print "check_dell_powerconnect.pl v1.2 (feb-2019)\n\n";
+  print "This  Plugin checks the hardware of DELL 35XX,62XX,N11XX\nswitches (fans, temp-sensor, power supply), and probably\nmore models! (not tested)\n\n";
+  print "Usage: check_dell_powerconnect -H host -C community [-d]\n";
+  print "Options:\n";
+  print " -H --host STRING or IPADDRESS\n";
+  print "   Check interface on the indicated host.\n";
+  print " -C --community STRING\n";
+  print "   Community-String for SNMP-Walk.\n";
+  print " -U --units INTEGER\n";
+  print "   Number of units in stack.\n";
+  print " -d --debug\n";
+  print "   Extended output for debugging.\n\n";
+  
+  exit($status{"UNKNOWN"});
+}
+sub get_snmp_session
+{
+  my $ip        = $_[0];
+  my $community = $_[1];
+  my ($session, $error) = Net::SNMP->session(
+             -hostname  => $ip,
+             -community => $community,
+             -port      => 161,
+             -timeout   => 1,
+             -retries   => 3,
+             -translate => [-timeticks => 0x0] #schaltet Umwandlung von Timeticks in Zeitformat aus
+              );
+  return ($session, $error);
+}
+sub close_snmp_session
+{
+  my $session = $_[0];
+  
+  $session->close();
+}
+sub get_snmp_request
+{
+  my $session = $_[0];
+  my $oid     = $_[1];
+  return $session->get_request($oid);
+}
+sub get_snmp_table
+{
+  my $session = $_[0];
+  my $oid     = $_[1];
+  return $session->get_table($oid);
+}
+
+if ($#ARGV == -1)
+{
+  print_help();
+}
+
+my ($ip, $community, $units, $debug) = pars_args();
+my ($session, $error) = get_snmp_session($ip, $community);
+
+#Code String to show degrees sign in output..
+#see https://stackoverflow.com/questions/8334266/how-to-make-special-characters-in-a-bash-script-for-conky
+my $degree = "C";
+
+my $oid_unitdesc    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.1.0"; 
+my $oid_unitstate   = ".1.3.6.1.4.1.674.10895.3000.1.2.110.1.0"; 
+my $oid_firmware    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.4.0";
+my $oid_fanname     = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.2";
+my $oid_fanstate    = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.3";
+my $oid_psuname     = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.2";
+my $oid_psustate    = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.3";
+
+# Code added for managing SNMP get request errors
+my $result;
+my $unitdesc;
+if ($result = get_snmp_request($session, $oid_unitdesc)) {
+        $unitdesc = $result->{$oid_unitdesc};
+} else {
+        print "UNKNOWN - Unable to get unitdescription from $ip\n";
+        exit($status{UNKNOWN});
+}
+if ( $debug ) { print "Unitdesc: ".$unitdesc."\n"; }
+
+#my $oid_tempstatus	= ".1.3.6.1.4.1.89.53.15.1.9.1";
+my $oid_tempstatus = "";
+if ($unitdesc =~ /62/i) { $oid_tempstatus	= ".1.3.6.1.4.1.674.10895.5000.2.6132.1.1.43.1.8.1.4"; } #PC62XX series
+if ($unitdesc =~ /N11/i) { $oid_tempstatus	= ".1.3.6.1.4.1.674.10895.5000.2.6132.1.1.43.1.8.1.5"; } #N Series
+
+my $firmware;
+if ($result = get_snmp_request($session, $oid_firmware)) {
+        $firmware = $result->{$oid_firmware};
+} else {
+        print "UNKNOWN - Unable to get unit firmwareversion from $ip\n";
+        exit($status{UNKNOWN});
+}
+if ( $debug ) { print "Unit firmware: ".$firmware."\n"; }
+
+my $unitstate;
+if ($result = get_snmp_request($session, $oid_unitstate)) {
+        $unitstate = $result->{$oid_unitstate};
+} else {
+        print "UNKNOWN - Unable to get data from $ip\n";
+        exit($status{UNKNOWN});
+}
+if ( $debug ) { print "Unitstate: ".$unitstate.": ".$unitstates{$unitstate}."\n"; }
+$unitstate = $unitstates{$unitstate}.",";
+
+#check temperature if possible (Only PC35XX ..??)
+my $temperature = "";
+
+my %tempresult = %{get_snmp_table($session, $oid_tempstatus)};
+my $unitcount = 0;
+#find tempstates
+foreach my $oid(sort keys %tempresult)
+  {
+	if ( $temperature ne "" ) { $temperature .= ", "; } 
+    $unitcount++;
+	$temperature .= "Temp".$unitcount.": ".$tempresult{$oid}.$degree;
+  }	
+
+$temperature = " ".$temperature;
+if ( $debug ) { print "Number of units: ".$unitcount."\nUnittemp: ".$temperature."\n"; }
+
+# Check if it is a stack or not..
+my $stack;
+if ( $unitcount == 1 ) {
+	#no stack
+	$stack = "";
+	} else {
+	$stack= " ".$unitcount." Units"
+	#stack!
+	}
+if ( $units != 0 and $unitcount != $units) {
+	# number of units in stack is checked and unit is missing!
+	my $m = "";
+	if ( $unitcount != 1 ) { $m = "s"; } 
+	$stack = " ".$unitcount." Unit".$m." found, ".$units." expected!";
+	$unitstate = "CRITICAL:";
+}
+
+my %result1 = %{get_snmp_table($session, $oid_fanname)};
+my %result2 = %{get_snmp_table($session, $oid_fanstate)};
+my $counter = 0;
+my $counter1 = 0;
+my @fanname;
+my @fanstate;
+
+#find fan states
+  foreach my $oid(sort keys %result1)
+  {
+    $fanname[$counter] = $result1{$oid};
+    $counter++;
+  }
+    $counter = 0;
+  foreach my $oid(sort keys %result2)
+  {
+    $fanstate[$counter] = $result2{$oid};
+    $counter++;
+  }
+# Create Fan status line  
+my $fanstring;
+my $okfans = 0;
+for(my $i = 0; $i<$counter; $i++) {
+    if ($fanstate[$i] !=5)  { #is present
+	  if ($fanstate[$i] == 1) {
+	   $okfans++
+	  } else {
+      $fanstring = $fanstring.", ";
+      $fanstring .= $fanname[$i]." ".$entitystate{$fanstate[$i]};
+		if ( $unitstate eq "OK," ) { $unitstate = "WARNING:"; } 
+	  }
+	}
+}
+$fanstring = ", ".$okfans." Fans OK".$fanstring;
+  
+#find PSU states
+my @psuname;
+my @psustate; 
+if ($unitdesc =~ /N10/i) {
+my %result3 = %{get_snmp_table($session, $oid_psuname)};
+my %result4 = %{get_snmp_table($session, $oid_psustate)};
+  
+  $counter1 = 0;
+  foreach my $oid(sort keys %result3)
+  {
+    $psuname[$counter1] = $result3{$oid};
+    $counter1++;
+  }
+  $counter1 = 0;
+  foreach my $oid(sort keys %result4)
+  {
+    $psustate[$counter1] = $result4{$oid};
+    $counter1++;
+  }
+  close_snmp_session($session);  
+}
+# Create PSU status line  
+my $psustring;
+for(my $i =0; $i<$counter1; $i++) {
+    if ($psustate[$i] !=5)
+	{
+    $psustring .= ", ";
+    $psustring .= $psuname[$i]." ".$entitystate{$psustate[$i]};
+	}
+}
+
+
+# Create output line  
+my $string = $unitdesc." v".$firmware.": ".$unitstate.$stack.$temperature.$fanstring.$psustring;
+
+# Create correct exit state  
+  my $state = "OK";
+  if($string =~/UNKNOWN/)
+  {
+    $state = "UNKNOWN";
+  }
+  if($string =~/inactive|notpresent|WARNING/)
+  {
+    $state = "WARNING";
+  }
+  if($string =~/Error|CRITICAL/)
+  {
+    $state = "CRITICAL";
+  }
+  if ( $debug ) { print "Exit state is: ".$state." (".$status{$state}.")\n"; }
+
+print $string."\n";
+exit($status{$state});
+
