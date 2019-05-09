@@ -23,10 +23,12 @@
 #  v1.1.1 - aug2016: Corrected help dialog by vdmkenny.
 #         Was a vault on my side, but due to compatibility i'll leave it this way, however it is not logical.. :-(
 #  v1.2 - nov2018 Made suiteable for oracle 12.2 without SID support, and added verbose option.
+#  v1.3 - may2019 added descriptive error message while connecting and performing SQL tests.
 #
 
 use strict;
 no strict 'refs';
+my $version='v1.3';
 
 # Check for proper args....
 my %status="";
@@ -55,9 +57,9 @@ if (index($nocheck, "w") == -1) {push @param_array, [50,"<","Dispatcher Workload
 my @results;
 my $logontest = logon();
 my $i=0;
-if ($verbose) { print " Logontest result: $logontest (ORA-01017 is okay)\n"; }
+if ($verbose) { print " Logontest result: $logontest (ORA-01017 is okay, database is up!)\n"; }
 if ($logontest eq "ORA-01017"){
-if ($verbose) { print " Connect query: sqlplus -s $user/$pass@ $host:$port/$sid\n"; }
+if ($verbose) { print " Connect query: sqlplus -s $user/$pass@ $host:$port/$sid\n\n"; }
 for (my $i=0; $i<array_rows(\@param_array); $i++){
 # print "$param_array[$i][0] -- $param_array[$i][1] -- $param_array[$i][2] -- $param_array[$i][3]\n";
 
@@ -68,8 +70,11 @@ $param_array[$i][3]
 EOF |") or die;
   while ( my $res = <SQL> ) {
     #$res=trim($res);
-    #print "result=".$res."\n";
-    if ( $res =~/^\s*\S+/ ) { push(@results,trim($res));}
+    
+    if ( $res =~/^\s*\S+/ ) { 
+		if ($verbose) { print "result from query ".$i." = ".$res; }
+		push(@results,trim($res));
+		}
   }
 }
 
@@ -79,9 +84,14 @@ for ($i=0;$i<@results;$i++) {
   $value =~ s/^\S+\s*//; #For tablespace check get tablespace name. (2nd string)
   $results[$i] =~ s/ .*//; #and remove the name (2nd string) from the results....
   if ($verbose) { print " checking ".$param_array[$i][2]." RESULT:".$results[$i]." value:".$value." reference value:".$param_array[$i][0]."\n"; }
-  if ($results[$i] eq "ERROR:") {print "Unable to connect to ORACLE $sid, invalid credentials or locked !!! \n"; exit $ERRORS{"CRITICAL"};}
+  # Test for other errors during the connecting or query.
+  if ($results[$i] eq "ERROR:") {
+	my $errormessage = $results[$i+1];	
+	print "Error connecting to ORACLE $sid, $results[$i+1] \n"; 
+	exit $ERRORS{"CRITICAL"};
+	}
+  #Test the query results against the limits
   eval "unless (".$results[$i].$param_array[$i][1].$param_array[$i][0].") { print\"".$param_array[$i][2]." ".$sid.":$value result ".int($results[$i])." against $param_array[$i][0] \\n\"; exit ".$ERRORS{"WARNING"}.";}";
-
 }
 print "status and health of database $sid is OK\n";
 exit $ERRORS{"OK"};
@@ -196,7 +206,7 @@ sub pars_args {
   return ($host, $port, $sid, $user, $pass, $nocheck, $verbose); } 
 
 sub print_help() {
-  print "This plugin logs into the database and does some health checking inside the database.\n\n";
+  print "This plugin (version $version) logs into the database and does some health checking inside the database.\n\n";
   print "Usage: check_oracle_instant -H host -p listener-port -s SID -u username -w password -n tdlbasrw -f filename\n\n";
   print "Options:\n";
   print " -H --host STRING or IPADDRESS\n";
