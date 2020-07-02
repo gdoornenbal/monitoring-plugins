@@ -85,7 +85,7 @@ do
 			exit 1;;
     	? ) print_help_msg
         	exit 1;;
-        -h ) print_help_msg
+        h ) print_help_msg
             exit 1;;
 	esac
 done
