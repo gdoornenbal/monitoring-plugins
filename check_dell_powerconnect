@@ -40,7 +40,7 @@ my %unitstates   = (  '1' => 'unknown',
                       '2' => 'inactive',
                       '3' => 'OK',
                       '4' => 'loading' );
-
+					  
 my %entitystate  = (  '1' => 'normal',
                       '2' => 'warning',
                       '3' => 'critical',
@@ -89,7 +89,7 @@ sub pars_args
 sub print_help()
 {
   print "check_dell_powerconnect.pl v1.2 (feb-2019)\n\n";
-  print "This  Plugin checks the hardware of DELL 35XX,62XX,N11XX\nswitches (fans, temp-sensor, power supply), and probably\nmore models! (not tested)\n\n";
+  print "This Plugin checks the hardware of DELL 35XX,62XX,N11XX\nswitches (fans, temp-sensor, power supply), and probably\nmore models! (not tested)\n\n";
   print "Usage: check_dell_powerconnect -H host -C community [-d]\n";
   print "Options:\n";
   print " -H --host STRING or IPADDRESS\n";
@@ -147,17 +147,53 @@ my ($session, $error) = get_snmp_session($ip, $community);
 #Code String to show degrees sign in output..
 #see https://stackoverflow.com/questions/8334266/how-to-make-special-characters-in-a-bash-script-for-conky
 my $degree = "C";
-
-my $oid_unitdesc    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.1.0"; 
-my $oid_unitstate   = ".1.3.6.1.4.1.674.10895.3000.1.2.110.1.0"; 
-my $oid_firmware    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.4.0";
-my $oid_fanname     = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.2";
-my $oid_fanstate    = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.3";
-my $oid_psuname     = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.2";
-my $oid_psustate    = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.3";
-
-# Code added for managing SNMP get request errors
 my $result;
+
+#find out what type switch.. powerconnect or OS10 series.
+#and load the respective oid's.
+my $oid_sysName		= ".1.3.6.1.2.1.1.5.0";
+my $oid_ObjectId    = ".1.3.6.1.2.1.1.2.0";
+my $oid_unitdesc    = ".1.3.6.1.2.1.1.1.0";
+my ($oid_unitstate,$oid_firmware,$oid_fanname,$oid_fanstate,$oid_psuname,$oid_psustate,$oid_temperature);
+
+my $unitoid;
+if ($result = get_snmp_request($session, $oid_ObjectId)) {
+    $unitoid = $result->{$oid_ObjectId};
+	if ($unitoid =~ /11000/i) {
+			if ( $debug ) { print "This is a OS10 Series switch.\n"; } 
+			$oid_unitdesc    = ".1.3.6.1.2.1.1.1.0";
+			#$oid_unitdesc    = ".1.3.6.1.4.1.674.11000.5000.100.4.1.1.4.1.3.1.1";
+			$oid_unitstate   = ".1.3.6.1.4.1.674.11000.5000.100.4.1.1.4.1.4.1.1"; 
+			#$oid_firmware    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.4.0";
+			$oid_fanname     = ".1.3.6.1.4.1.674.11000.5000.100.4.1.2.2.1.5";
+			$oid_fanstate    = ".1.3.6.1.4.1.674.11000.5000.100.4.1.2.2.1.4";
+			$oid_psuname     = ".1.3.6.1.4.1.674.11000.5000.100.4.1.2.1.1.6";
+			$oid_psustate    = ".1.3.6.1.4.1.674.11000.5000.100.4.1.2.1.1.4";			
+			$oid_temperature = ".1.3.6.1.4.1.674.11000.5000.100.4.1.1.3.1.11.1";
+			
+			%unitstates   = (  '1' => 'ready',
+							   '2' => 'cardMisMatch',
+							   '3' => 'cardProblem',
+							   '4' => 'diagMode',
+							   '5' => 'cardAbsent',
+							   '6' => 'offline' );
+		} else {
+			if ( $debug ) { print "This is a PowerConnect series switch.\n"; }
+			$oid_unitdesc    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.1.0"; 
+			$oid_unitstate   = ".1.3.6.1.4.1.674.10895.3000.1.2.110.1.0"; 
+			$oid_firmware    = ".1.3.6.1.4.1.674.10895.3000.1.2.100.4.0";
+			$oid_fanname     = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.2";
+			$oid_fanstate    = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.3";
+			$oid_psuname     = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.2";
+			$oid_psustate    = ".1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.3";
+		}
+} else {
+	# Code added for managing SNMP get request errors
+    print "UNKNOWN - Unable to get unitObjectID from $ip\n";
+    exit($status{UNKNOWN});
+}
+if ( $debug ) { print "UnitObjectId: ".$unitoid."\n"; }
+
 my $unitdesc;
 if ($result = get_snmp_request($session, $oid_unitdesc)) {
         $unitdesc = $result->{$oid_unitdesc};
@@ -165,31 +201,47 @@ if ($result = get_snmp_request($session, $oid_unitdesc)) {
         print "UNKNOWN - Unable to get unitdescription from $ip\n";
         exit($status{UNKNOWN});
 }
+my @unitarray  = split "\n", $unitdesc;
 if ( $debug ) { print "Unitdesc: ".$unitdesc."\n"; }
 
 #my $oid_tempstatus	= ".1.3.6.1.4.1.89.53.15.1.9.1";
 my $oid_tempstatus = "";
 if ($unitdesc =~ /62/i) { $oid_tempstatus	= ".1.3.6.1.4.1.674.10895.5000.2.6132.1.1.43.1.8.1.4"; } #PC62XX series
 if ($unitdesc =~ /N11/i) { $oid_tempstatus	= ".1.3.6.1.4.1.674.10895.5000.2.6132.1.1.43.1.8.1.5"; } #N Series
+if ($unitarray[0] =~ /OS10/i) { $oid_tempstatus	= ".1.3.6.1.4.1.674.11000.5000.100.4.1.1.4.1.5.1"; } #OS10 Series
 
 my $firmware;
-if ($result = get_snmp_request($session, $oid_firmware)) {
-        $firmware = $result->{$oid_firmware};
-} else {
-        print "UNKNOWN - Unable to get unit firmwareversion from $ip\n";
-        exit($status{UNKNOWN});
-}
+if ( $oid_firmware != "") {
+	if ($result = get_snmp_request($session, $oid_firmware)) {
+		$firmware = $result->{$oid_firmware};
+		#$unitdesc = (split ' ', $unitdesc)[-1];
+		} else {
+		print "UNKNOWN - Unable to get unit firmwareversion from $ip\n";
+		exit($status{UNKNOWN});
+		}
+	} else {
+		#OS10 get firmware out of sysdescr.
+		#print "OS10 firmware: $unitarray[3]\n";
+		$firmware = (split ' ', $unitarray[3])[-1];
+		$unitdesc = (split ' ', $unitarray[4])[-1];
+	}
+
 if ( $debug ) { print "Unit firmware: ".$firmware."\n"; }
 
 my $unitstate;
 if ($result = get_snmp_request($session, $oid_unitstate)) {
         $unitstate = $result->{$oid_unitstate};
+		
+		if ( $debug ) { print "Unitstate: ".$unitstate.": ".$unitstates{$unitstate}."\n"; }
+		
+		$unitstate = $unitstates{$unitstate}.",";	
+		
+		
 } else {
         print "UNKNOWN - Unable to get data from $ip\n";
         exit($status{UNKNOWN});
 }
-if ( $debug ) { print "Unitstate: ".$unitstate.": ".$unitstates{$unitstate}."\n"; }
-$unitstate = $unitstates{$unitstate}.",";
+
 
 #check temperature if possible (Only PC35XX ..??)
 my $temperature = "";
@@ -262,7 +314,10 @@ $fanstring = ", ".$okfans." Fans OK".$fanstring;
 #find PSU states
 my @psuname;
 my @psustate; 
-if ($unitdesc =~ /N10/i) {
+my $psustring;
+#if (! $unitdesc =~ /N11/i) {
+if ( index($unitdesc, "N11" ) == -1 ) {
+if ( $debug ) { print "Checking PSU states..\n"; }
 my %result3 = %{get_snmp_table($session, $oid_psuname)};
 my %result4 = %{get_snmp_table($session, $oid_psustate)};
   
@@ -279,18 +334,23 @@ my %result4 = %{get_snmp_table($session, $oid_psustate)};
     $counter1++;
   }
   close_snmp_session($session);  
-}
+
 # Create PSU status line  
-my $psustring;
+my $psulong;
+my $okpsus = 0;
 for(my $i =0; $i<$counter1; $i++) {
-    if ($psustate[$i] !=5)
-	{
-    $psustring .= ", ";
-    $psustring .= $psuname[$i]." ".$entitystate{$psustate[$i]};
+    if ( $debug ) { print $psuname[$i]." ".$entitystate{$psustate[$i]}."\n"; }
+    if ($psustate[$i] !=5) { #notInstalled
+		if ($psustate[$i] != 1) {
+			$psulong .= ", ";
+			$psulong .= $psuname[$i]." ".$entitystate{$psustate[$i]};
+			} else {
+			$okpsus++
+			}
 	}
 }
-
-
+$psustring=", $okpsus PSU's OK$psulong";
+}
 # Create output line  
 my $string = $unitdesc." v".$firmware.": ".$unitstate.$stack.$temperature.$fanstring.$psustring;
 
@@ -300,11 +360,11 @@ my $string = $unitdesc." v".$firmware.": ".$unitstate.$stack.$temperature.$fanst
   {
     $state = "UNKNOWN";
   }
-  if($string =~/inactive|notpresent|WARNING/)
+  if($string =~/inactive|notpresent|warning|WARNING/)
   {
     $state = "WARNING";
   }
-  if($string =~/Error|CRITICAL/)
+  if($string =~/Error|critical|CRITICAL/)
   {
     $state = "CRITICAL";
   }
