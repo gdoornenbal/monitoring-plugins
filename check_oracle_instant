@@ -24,7 +24,7 @@
 #         Was a vault on my side, but due to compatibility i'll leave it this way, however it is not logical.. :-(
 #  v1.2 - nov2018 (GD) Made suiteable for oracle 12.2 without SID support, and added verbose option.
 #  v1.3 - may2019 (GD) added descriptive error message while connecting and performing SQL tests.
-#  v1.4 - aug2022 (GD) added -ts tablespace option to easy modify tablespace usage percentage check.
+#  v1.4 - aug2022 (GD) added -ts and -lhc option to easy modify Tablespace/LibaryHitCache usage percentage check.
 
 use strict;
 no strict 'refs';
@@ -36,8 +36,8 @@ if ($#ARGV <= 0){
   &print_help();
 }
 
-my ($host, $port, $sid, $user, $pass, $nocheck, $verbose, $ts) = pars_args();
-if ($verbose) { print " Verbose is on:\n Submitted arguments are: $host $port $sid $user $pass $nocheck $verbose $ts\n"; }
+my ($host, $port, $sid, $user, $pass, $nocheck, $verbose, $ts, $lhc) = pars_args();
+if ($verbose) { print " Verbose is on:\n Submitted arguments are: $host $port $sid $user $pass $nocheck $verbose $ts $lhc\n"; }
 
 sub trim($);
 my @result;
@@ -46,7 +46,7 @@ my %ERRORS=('OK'=>0,'WARNING'=>1,'CRITICAL'=>2);
 my @param_array;
 if (index($nocheck, "t") == -1) {push @param_array, [$ts,"<","TableSpace usage",'select * from (select round((d.sizeMb-round(sum(f.bytes))/1048576)/d.maxMb*100) percentused, f.tablespace_name from dba_free_space f, (select tablespace_name, sum(MAXBYTES)/1048576 maxMb, sum(bytes)/1048576 sizeMb from dba_data_files group by tablespace_name) d where f.tablespace_name (+)=d.tablespace_name group by f.tablespace_name, d.sizeMb, d.maxMb order by percentused desc) where rownum <2;'];}
 if (index($nocheck, "d") == -1) {push @param_array, [85,">","Dictionary Cache Hit Ratio",'SELECT (1 - (Sum(getmisses)/(Sum(gets) + Sum(getmisses)))) * 100 FROM v\$rowcache;'];}
-if (index($nocheck, "l") == -1) {push @param_array, [99,">","Library Cache Hit Ratio",'SELECT (1 -(Sum(reloads)/(Sum(pins) + Sum(reloads)))) * 100  FROM   v\$librarycache;'];}
+if (index($nocheck, "l") == -1) {push @param_array, [$lhc,">","Library Cache Hit Ratio",'SELECT (1 -(Sum(reloads)/(Sum(pins) + Sum(reloads)))) * 100  FROM   v\$librarycache;'];}
 if (index($nocheck, "b") == -1) {push @param_array, [89,">","DB Block Buffer Cache Hit Ratio",'SELECT (1 - (phys.value / (db.value + cons.value))) * 100 FROM v\$sysstat phys,v\$sysstat db,v\$sysstat cons WHERE  phys.name  = \'physical reads\' AND db.name = \'db block gets\' AND cons.name  = \'consistent gets\';'];}
 if (index($nocheck, "a") == -1) {push @param_array, [98,">","Latch Hit Ratio",'SELECT (1 - (Sum(misses) / Sum(gets))) * 100  FROM   v\$latch;'];}
 if (index($nocheck, "s") == -1) {push @param_array, [5,"<","Disk Sort Ratio",'SELECT (disk.value/mem.value) * 100 FROM v\$sysstat disk,v\$sysstat mem WHERE  disk.name = \'sorts (disk)\' AND mem.name  = \'sorts (memory)\';'];}
@@ -134,6 +134,7 @@ sub pars_args {
   my $file      = "";
   my $verbose   = "0";
   my $ts        ="95";  
+  my $lhc       ="99";
 #  $oldarg = "";
  
   while(@ARGV)
@@ -207,10 +208,17 @@ sub pars_args {
       shift @ARGV;
       next;
     }
+		if($ARGV[0] =~/^-lhc/) 
+    {
+      $lhc = $ARGV[1];
+      shift @ARGV;
+      shift @ARGV;
+      next;
+    }
 	# Code to jump out of loop when not existing argument is used (The while loop only reaches this point if all options above have failed.)
     print "Unknown argument used, correct your syntax.!!! \n"; exit($status{"UNKNOWN"});
   }
-  return ($host, $port, $sid, $user, $pass, $nocheck, $verbose, $ts); } 
+  return ($host, $port, $sid, $user, $pass, $nocheck, $verbose, $ts, $lhc); } 
 
 sub print_help() {
   print "This plugin (version $version) logs into the database and does some health checking inside the database.\n\n";
@@ -238,6 +246,8 @@ sub print_help() {
   print "    w: Dispatcher Workload\n";
   print " -ts percentage\n";
   print "    Change default tablespace space percentage from 95% to another value\n";
+  print " -lhc percentage\n";
+  print "    Change default Libary Hit Cache ratio from 99% to lower value\n";
   print " -v --verbose\n";
   print "    Verbose output, give extra info while doing all tests\n";
   print " -f --file filename\n";
