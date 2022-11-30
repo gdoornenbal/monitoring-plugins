@@ -22,6 +22,7 @@
 #   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 ######       CHANGE LOG        #########
+# V1.2:nov22: remove | from battery_status, and calc output power when (apc) ups does not support power MIB..
 # V1.1:Include new function to measure used output power (by dooger april 2019)
 # V1.0:Include new parameter to select de version of snmp (1 or 2c)
 # V0.2:Fix the UNKNOWN state when warning value configured was the same as the current temperature on the UPS 
@@ -120,7 +121,7 @@ host='localhost'
 community='public'
 parameter='none'
 output=''
-perfdata=''
+perfdata='|'
 state=$ST_OK
 statestring=''
 val=''
@@ -133,12 +134,12 @@ verbose=0
 #ups oids snmp
 oid_upsOutputNumLines='1.3.6.1.2.1.33.1.4.3.0'
 oid_upsInputNumLines='1.3.6.1.2.1.33.1.3.2.0'
+oid_upsBatteryStatus='1.3.6.1.2.1.33.1.2.1.0'
 oid_upsBatteryTemperature='1.3.6.1.2.1.33.1.2.7.0'
 oid_upsOutputVoltage='1.3.6.1.2.1.33.1.4.4.1.2' #RMS Volts
 oid_upsOutputAmpere='1.3.6.1.2.1.33.1.4.4.1.3' #RMS Amp
 oid_upsOutputPower='1.3.6.1.2.1.33.1.4.4.1.4' #RMS Watts
 oid_upsOutputPercentLoad='1.3.6.1.2.1.33.1.4.4.1.5' #percent
-oid_upsBatteryStatus='1.3.6.1.2.1.33.1.2.1.0'
 oid_upsInputVoltage='1.3.6.1.2.1.33.1.3.3.1.3'
 oid_upsEstimatedChargeRemaining='1.3.6.1.2.1.33.1.2.4.0'
 oid_upsEstimatedMinutesRemaining='1.3.6.1.2.1.33.1.2.3.0'
@@ -188,7 +189,7 @@ alarm(){
 	   state=$ST_UK
 	fi
 	output="$val alarms present "$alarmtext
-	perfdata="'alarms'=$val"	  
+	perfdata="|'alarms'=$val"	  
 }
 
 temperature(){	
@@ -222,7 +223,7 @@ output_load(){
 	  counter=`expr $counter + 1`
    done
    output="Percent Load of $numlines lines:"
-   perfdata=""
+   #perfdata=""
    counter=1
    flag=0
    for valor in ${percentload[*]}
@@ -263,10 +264,16 @@ output_power(){
       oid="$1.$counter"
 	  if test $verbose -eq 1 ; then echo "command: snmpget -v $snmpversion -c $community $host $oid"; fi
 	  powerload[$counter]=`getsnmp $oid`
+	  if test ${powerload[$counter]} -eq 0
+		then 
+		amp=`getsnmp $oid_upsOutputAmpere.$counter`
+		volt=`getsnmp $oid_upsOutputVoltage.$counter`
+		powerload[$counter]=$(bc <<< "$volt*$amp/10") 
+	  fi
 	  counter=`expr $counter + 1`
    done
    output="Power load of $numlines lines:"
-   perfdata=""
+   #perfdata=""
    counter=1
    flag=0
    for valor in ${powerload[*]}
@@ -313,7 +320,7 @@ output_amp(){
 	  counter=`expr $counter + 1`
    done
    output="Current flow of $numlines lines:"
-   perfdata=""
+   #perfdata=""
    counter=1
    flag=0
    for valor in ${poweramp[*]}
@@ -361,7 +368,7 @@ input_voltage(){
 	  counter=`expr $counter + 1`
    done
    output="Voltage of $numlines input lines:"
-   perfdata=""
+   #perfdata=""
    counter=1
    flag=0
    warningup=`echo $2 | awk -F: '{print $2}'`
@@ -420,6 +427,7 @@ battery_status(){
 		 ;;
 	esac
 	output="battery status = "$battery_status
+	perfdata=""
 }
 
 battery_charge_remain(){	
@@ -452,7 +460,6 @@ getsnmp(){
 		exit $ST_UK
 	fi
 	echo $text | awk '{print $4}'
-	
 } 
 
 #test error in the exit of function
@@ -531,7 +538,7 @@ case $parameter in
    output_amp)
         output_amp $oid_upsOutputAmpere $warning $critical $oid_upsOutputNumLines
 		;;
-	input_voltage)
+   input_voltage)
         input_voltage $oid_upsInputVoltage $warning $critical $oid_upsInputNumLines
 		;;
    num_input_lines)
@@ -563,5 +570,5 @@ elif test $state -eq $ST_UK
 	then statestring="UNKNOWN"
 fi
 
-echo "$statestring - $output|$perfdata"
+echo "$statestring - $output$perfdata"
 exit $state
