@@ -14,7 +14,12 @@ A complete new plugin to check DANE TLSA records.  Already with the following op
  * mail ports with starttls are supported
 To support split-dns environments the following options are available
  * Give specific ip address of the server hosting the certificate
- * set fdqn or ip address of the DNS server you want to query.
+ * set fqdn or ip address of the DNS server you want to query.
+
+### check_nta
+Added jan 2024; This plugin checks if the NTA7516 dns record for a given domain exists and is valid. 
+NTA dns records have an enddate, so the plugin gives a warning when that date is reached or passed.
+This is a simple plugin, just give the domain name, and optional the fqdn or ip address of the DNS server to request.
 
 ### check_dell_powerconnect
 This  Plugin updated in feb 2019 checks the hardware of DELL 35XX,62XX,N11XX switches (fans, temp-sensor, power supply), and probably more models!

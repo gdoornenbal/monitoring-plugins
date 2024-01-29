@@ -1,0 +1,119 @@
+#!/bin/bash
+# Author: Gerrit Doornenbal g(dot)doornenbal(at)gmail(dot)com
+# Date: jan 2024
+# Description: Used to monitor the validity of NTA DNS record
+# Dependencies: host.
+#
+# for more info about NTA:
+# see e.g: https://documentation.cryptshare.com/w/NTACurrent_en:DNS_Setup
+#
+# License: This nagios/icinga plugin comes with ABSOLUTELY NO WARRANTY. You may redistribute copies of
+# the plugins under the terms of the GNU General Public License. For more information about these 
+# matters, see the GNU General Public License.
+# Some parts/ideas are stolen from other scripts :-)
+#  
+# jan 2024  v0.1.0 initial release
+#   
+
+version=0.1.0
+
+#### Procedures / Functions
+print_help_msg(){
+	echo "This plugin is used to validate any NTA7516 record"
+	echo
+	echo "Usage: ${0##*/} -d <domainname> [-D <DNS server to query>]"
+	echo 
+	echo "Explanation of options:"
+	echo " -d  The name of the domain you want to check NTA 7516 record."
+	echo "Optional options:"
+	echo " -D  FQDN or IP address of the DNS server you want to query."
+	echo " -v  Verbose: give extra output for testing purposes"
+	echo " -V  version of this plugin."
+	echo " -h or ? this help message."
+	echo 
+}
+
+#### Actual Start of this script
+
+#setting defaults
+domain=""
+dnsserver=""
+verbose=0
+nagios_status=0
+nagios_message=""
+nagios_state_msg="OK: "
+
+#reading options
+while getopts d:D:?hvV options;
+do
+	case $options in
+		d ) domain="$OPTARG";;
+		D ) dnsserver="$OPTARG";;
+		v ) verbose=1;;
+		V ) echo "${0##*/} version $version"
+			exit 1;;
+    	* ) print_help_msg
+        	exit 1;;
+	esac
+done
+
+#check for minimal supplied options.
+if [ "$domain" == "" ]
+then
+  print_help_msg 
+  exit 1
+fi
+
+###First find the NTA7516 records in dns
+command="host -t txt $domain $dnsserver | grep NTA7516 | cut -d '\"' -f 2" 
+if [ $verbose = 1 ]; then echo " downloading DNS NTA record for $domain"; echo " command: $command"; fi
+dnsdata=$(eval $command)
+
+if [ $verbose = 1 ]; then echo " result: $dnsdata"; fi
+if [ "$dnsdata" = "" ]; then
+	if [ ! $dnsserver = "" ]; then dnstext=" at $dnsserver"; fi #mention dnsserver when given.
+	echo "UNKNOWN: NO NTA7516 record found for $domain$dnstext"
+	exit 3
+fi	
+
+### NTA7516 dns record found, reading this record...
+export IFS=";"
+ntaprovider=""
+for value in $dnsdata; do
+	if [ $verbose = 1 ]; then echo "value: $value"; fi
+	if [[ $value = 'v='* ]]; then
+		ntaversion=${value#*=}
+	elif [[ $value = 'startdate='* ]]; then
+		ntastart=${value#*=}
+	elif [[ $value = 'enddate='* ]]; then
+		ntaend=${value#*=}
+	elif [[ $value = 'provider='* ]]; then
+		ntaprovider=${value#*=}
+	elif [[ $value = 'ntamx='* ]]; then
+		ntamx=${value#*=}
+	fi
+done
+
+nagios_message="domain: $domain $ntaversion secured by $ntaprovider"
+enddate=${ntaend//-}
+now=$(date +"%Y%m")
+if [ $verbose = 1 ]; then echo comparing dates: $now $enddate; fi
+if [[ $ntaprovider = ""  ]]; then
+	nagios_message="domain: $domain $ntaversion missing Provider!"
+	nagios_state_msg="CRITICAL: "
+	nagios_status=2	
+elif [ $now -eq $enddate ]; then
+	nagios_message="$nagios_message is expiring NOW ($ntaend)"
+	nagios_state_msg="WARNING: "
+	nagios_status=1
+elif [ $now -ge $enddate ]; then
+	nagios_message="$nagios_message is expired! ($ntaend)"
+	nagios_state_msg="CRITICAL: "
+	nagios_status=2
+else 
+	nagios_message="$nagios_message, valid until $ntaend."
+	nagios_status=0
+fi
+
+echo "$nagios_state_msg$nagios_message"
+exit $nagios_status

@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 ############################## check_snmp_storage ##############
-# Version : 1.4
-# Date : december 1 2016
+# Version : 1.4, Date : december 1 2016
+# Version : 1.5, Date : april 2023
 # Updated by: Gerrit Doornenbal (gerrit at doornenbal.org)
 #
 # Update history:
@@ -9,7 +9,10 @@
 #   Added option to test hpux systems
 #   Multiple small enhancements.
 #   Repaired bugged total usage counting 
+# Version : 1.5
+#   Added free space output by WARN/CRIT output.
 #
+
 # Version : 1.3.1
 # Date :  2007 01 22
 # Author2 : Paul Vogt (  paul dot unix at gmail.com )
@@ -563,7 +566,7 @@ verb ("o_output : $o_output");
 	   || (($pu >= $o_warn) && ($locstate=$warn_state=1));
 	if (defined($o_shortL[2])) {}
 	if (!defined($o_shortL[0]) || ($locstate==1)) { # print full output if warn or critical state
-	  $output.=sprintf ("%s: Disk Usage %.0f MB of %.0f MB, %.0f%% used. ",$descr[$i],$bu,$to,$pu);
+	  $output.=sprintf ("%s: Disk Usage %.0f MB of %.0f MB, %.0f MB Free.",$descr[$i],$bu,$to,$bl);
     } elsif ($o_shortL[0] == 1) {
 	  $output.=sprintf ("%s: %.0f%% ",$descr[$i],$pu);
 	} 
