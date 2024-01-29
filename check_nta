@@ -18,36 +18,6 @@
 version=0.1.0
 
 #### Procedures / Functions
-extract() {
-  # NTA7516 # X # : selector what part of certificate to check:  0=whole certificate, 1=public key.
-  case "$3" in
-  0) openssl x509 -in "$1" -outform DER;;
-  1) openssl x509 -in "$1" -noout -pubkey | openssl pkey -pubin -outform DER;;
-  esac
-}
-digest() {
-  # NTA7516 # # X : matching type: 0:entire cert-info 1: SHA-256 hash 2:SHA-512 hash
-  case "$4" in
-  0) cat;;
-  1) openssl dgst -sha256 -binary;;
-  2) openssl dgst -sha512 -binary;;
-  esac
-}
-encode() {
-  local cert=$1; shift
-  local u=$1; shift
-  local s=$1; shift
-  local m=$1; shift
-  printf "%s\n" \
-    "$(hexdump -ve '/1 "%02X"')"
-}
-genrr() {
-    rr=$(
-	extract "$@" | digest "$@" | encode "$@"
-	exit $(( ${PIPESTATUS[0]} | ${PIPESTATUS[1]} | ${PIPESTATUS[2]} ))
-    )
-    status=$?; if [ $status -ne 0 ]; then exit $status; fi
-}
 print_help_msg(){
 	echo "This plugin is used to validate any NTA7516 record"
 	echo
